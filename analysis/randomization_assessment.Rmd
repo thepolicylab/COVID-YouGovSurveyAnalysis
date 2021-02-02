@@ -1,0 +1,124 @@
+---
+title: Randomization assessment
+author: Jake Bowers
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output:
+  pdf_document:
+    toc: false
+---
+
+
+This file assesses the randomization. We have no reason to doubt the YouGov
+randomizer. However, this is our standard practice to check to learn about
+possible chance covariate imbalances. Notice that we do not use survey weights
+here: our goal is to ask whether the randomization done *among the sampled
+respondents* worked as it should --- i.e had no systematic relationship with a
+collection of covariates.
+
+
+```{r setup, echo=FALSE}
+library(here)
+source(here("analysis","rmd_setup.R"))
+library(coin)
+library(RItools)
+library(estimatr)
+library(foreign)
+```
+
+```{r readdata, echo=TRUE, warning=FALSE}
+dat <- read.spss(here("data/Fourth_Wave","TPL_Testing_Survey_FourthWave_YouGov_MERGEDWITHTHIRDWAVEFORMESSING.sav"),to.data.frame = TRUE)
+```
+
+```{r datasetup, echo=TRUE}
+## Treatment assignment q115_treat
+
+# Looks like not everyone was included in the
+## experiment in the fourth wave, that 500 people were excluded (perhaps not
+## included in this wave)
+
+table(dat$q115_treat,exclude=c())
+
+## So, just focus on the valid respondents.
+
+datw4 <- droplevels(dat[!is.na(dat$q115_treat),])
+
+## Some of the code below wants either treatment assignment or outcome to be either a factor variable (with labels) or a binary variable.
+table(datw4$q115_treat,exclude=c())
+datw4$q115N <- as.numeric(datw4$q115_treat=="Community")
+datw4$q115F <- factor(datw4$q115N)
+```
+
+We think that treatment assignment was done within strata of pid3 but are not sure. For now, presenting the analysis **both** ways.
+
+Since I am not 100% sure I understand all of the recoding, I present a couple
+of different approaches here. First, I try to let R handle the categorical vs
+numeric variable issue. I think these are the relevant covariates where a
+chance imbalance could change our interpretation of the results.
+
+Here I present the results for **both** the simply or completely randomized
+case ("unblocked") and the block-randomized case (where randomization occurred
+within strata/blocks of party id) ("pid").
+
+
+```{r randtest1, echo=TRUE}
+## Trying to let R handle the dummy recoding
+xb1 <- xBalance(q115N~q1+age+gender_client+educ+dependents_dummy_coded+race+core_city,
+    strata=list(notblocked=NULL,pid3=~pid3),data=datw4,report="all")
+
+## Overall no detectable departure from what we'd expect from a well executed random assignment
+xb1$overall
+
+## And here just comparing the one-by-one p-values (without adjustment)
+
+theps <- xb1$results[,"p",]
+theps_adj <- apply(theps,2,function(x){ p.adjust(x,method="holm") })
+pres <- data.frame(cbind(unadj=theps,adj=theps_adj))
+names(pres)[3:4] <- paste("Adj:",names(pres)[3:4])
+pres
+
+## More information (including unadjusted p-values)
+xb1$results[,c("q115N=0","q115N=1","adj.diff","std.diff","p"),]
+
+```
+
+Checking the asymptotic assumption of `xBalance` (compare to `xb1$overall` above)
+
+```{r coincheck, echo=TRUE}
+
+coin1_asympt <- independence_test(q1+age+gender_client+educ+dependents_dummy_coded+race+core_city~q115F|pid3,data=datw4,
+    teststat="quadratic",distribution=asymptotic())
+coin1_asympt
+pvalue(coin1_asympt)
+
+coin1_perm <- independence_test(q1+age+gender_client+educ+dependents_dummy_coded+race+core_city~q115F|pid3,data=datw4,
+    teststat="quadratic",distribution=approximate(nresample=5000))
+coin1_perm
+## This next shows a "confidence interval" because another 5000 sims might change the p-value
+pvalue(coin1_perm)
+
+```
+
+
+Here is a version using the recoding from SPSS. I'm not sure why we have a difference.
+
+```{r}
+## Covariates
+## q1 age gender_client race educ pid3 faminc_new
+## q115_treat age gender_dummy_coded_female party_dummy_coded_republican
+##    race_dummy_coded_black race_dummy_coded_latino core_city_excluding_Newport_and_noncentral_PVD
+##    eighteen_to_twentynine_dummy_coded sixty_and_over_dummy_coded low_SES_dummy_coded No_HS_dummy_coded
+##    HS_dummy_coded Some_college_dummy_coded two_year_degree_dummy_coded dependents_dummy_coded.
+
+
+xb2<-xBalance(q115N~age+gender_dummy_coded_female+party_dummy_coded_republican+race_dummy_coded_black+
+    race_dummy_coded_latino+core_city_excluding_Newport_and_noncentral_PVD+
+    eighteen_to_twentynine_dummy_coded+sixty_and_over_dummy_coded+low_SES_dummy_coded+No_HS_dummy_coded+
+    HS_dummy_coded+Some_college_dummy_coded+two_year_degree_dummy_coded+dependents_dummy_coded,
+strata=list(notblocked=NULL,pid3=~pid3),data=datw4,report="all")
+
+xb2$overall
+
+xb2$results[,c("q115N=0","q115N=1","adj.diff","std.diff","p"),]
+xb2$results[,"p",]
+
+```

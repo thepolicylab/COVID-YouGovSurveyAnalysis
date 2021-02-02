@@ -1,0 +1,13 @@
+# Editor cruft
+.vscode/
+.*.swp
+*~
+
+# Python cruft
+__pycache__
+.ipynb_checkpoints/
+*.pyc
+
+# Mac cruft
+.DS_Store
+.Rproj.user

@@ -1,0 +1,175 @@
+---
+title: Outcome analysis
+author: Jake Bowers
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output:
+  pdf_document:
+    toc: false
+---
+
+This file assesses the relationship between treatment assignment and the
+outcome. The hypothesis is that differences in framing of the message should
+not change behavior among these people. When we wrote this, we did not know for sure whether the experimental treatment was randomly assigned within groups defined by party identification or whether it was simply randomized to all respondents. So, we executed the analysis both ways. We later learned from YouGov that this was a block or stratified randomized experiment, with blocking on party identification.
+
+```{r setup, echo=FALSE}
+library(here)
+source(here("analysis","rmd_setup.R"))
+library(coin)
+library(RItools)
+library(estimatr)
+library(foreign)
+```
+
+```{r readdata, echo=TRUE, warning=FALSE}
+dat <- read.spss(here("data/Fourth_Wave","TPL_Testing_Survey_FourthWave_YouGov_MERGEDWITHTHIRDWAVEFORMESSING.sav"),to.data.frame = TRUE)
+```
+
+```{r datasetup, echo=TRUE}
+## Treatment assignment q115_treat
+
+# Looks like not everyone was included in the
+## experiment in the fourth wave, that 500 people were excluded (perhaps not
+## included in this wave)
+
+table(dat$q115_treat,exclude=c())
+
+## So, just focus on the valid respondents.
+
+datw4 <- droplevels(dat[!is.na(dat$q115_treat),])
+
+## Some of the code below wants either treatment assignment or outcome to be either a factor variable (with labels) or a binary variable.
+table(datw4$q115_treat,exclude=c())
+datw4$q115N <- as.numeric(datw4$q115_treat=="Community")
+datw4$q115F <- factor(datw4$q115N)
+datw4$vaccine_timing_interestN <- as.numeric(datw4$vaccine_timing_interest=="Clicked on list")
+datw4$vaccine_timing_interestF <- factor(datw4$vaccine_timing_interestN)
+```
+
+We think that treatment assignment was done within strata of pid3 but are not sure. For now, presenting the analysis **both** ways.
+
+# Analysis as a block-randomized experiment: Treatment Effects in the Sample
+
+First, assuming that treatment was assigned by coin flip within block. We present three analyses that use asymptotic assumptions and one that approximates the distribution of the test statistic directly using permutations of treatment assignment. All of these analyses might be called "randomization based statistical inference" --- they differ in whether they assume that the randomization-based distribution is well approximated by a Normal distribution or not.
+
+Since we are acting like randomization occurred within block, we have to represent that in the analysis. This means we are using the Cochran-Mantel-Haenszel test rather than the Chi-square test (equivalently we use a block-specific weighted analysis using OLS in the `difference_of_means` line).
+
+
+```{r blocked, echo=TRUE}
+
+## Two asymptotic analyses using tests like the CMH test:
+res1 <- xBalance(q115N~vaccine_timing_interestN,strata=list(pid3=~pid3),data=datw4,report="all")
+
+res1
+
+res2 <- cmh_test(vaccine_timing_interestF~q115F|pid3,data=datw4,distribution=asymptotic())
+
+res2
+## Least Squares Asymptotic Approximation using Neyman standard errors ("estimate" below is the same as "adj.diff" in xBalance)
+res3 <- difference_in_means(vaccine_timing_interestN~q115N,blocks=pid3,data=datw4)
+
+res3
+
+set.seed(12345)
+## Using the permutation distribution to check on the asymptotic approximation
+res4 <- cmh_test(vaccine_timing_interestF~q115F|pid3,data=datw4,distribution=approximate(nresample=10000))
+
+res4
+
+```
+
+## Treatment Effects in subgroups
+
+What is the effect of the treatment among those who are not definitely sure they will be vaccinated: these are the people whose behavior we would aim to change with different messaging strategies.
+
+```{r blockedsubgroup, echo=TRUE}
+
+## First, we look for any chance imbalance (with prior vaccination intention): none found
+table(datw4$q1,datw4$q115_treat,exclude=c())
+
+q1test <- cmh_test(q1~q115F|pid3,data=datw4)
+q1test
+
+## Next we repreat the previous analysis, but excluding those who report that they were certain about vaccination.
+
+datw4a <- droplevels(datw4[datw4$q1!="Definitely will",])
+
+res1a <- xBalance(q115N~vaccine_timing_interestN,strata=list(pid3=~pid3),
+    data=datw4a,
+    report="all")
+
+res1a
+
+res2a <- cmh_test(vaccine_timing_interestF~q115F|pid3,data=datw4a,distribution=asymptotic())
+
+res2a
+## Least Squares Asymptotic Approximation using Neyman standard errors ("estimate" below is the same as "adj.diff" in xBalance)
+res3a <- difference_in_means(vaccine_timing_interestN~q115N,blocks=pid3,data=datw4a)
+
+res3a
+
+## Using the permutation distribution to check on the asymptotic approximation
+set.seed(12345)
+res4a <- cmh_test(vaccine_timing_interestF~q115F|pid3,data=datw4a,distribution=approximate(nresample=10000))
+
+res4a
+
+```
+
+
+
+## Treatment Effects in the Population: Supplementary Analysis 
+
+The preceding analyses did not try to estimate the effect of the messages **in
+the population** from which the sample was drawn. We can also estimate these,
+although we will pay a price in terms of precision (see Miratrix, et al 2018
+doi: 10.1017/pan.2018.1). Following that paper, we can estimate the effects in
+the population using the following approximate approach:
+
+```{r pate, echo=TRUE}
+pate1 <- difference_in_means(vaccine_timing_interestN~q115N,blocks=pid3,data=datw4,weights=weight)
+pate1
+```
+
+Exploring the weights a bit because we did not understand them. Who is weighted up and who down?
+
+```{r}
+covfmla <- q115N~q1+age+gender_client+educ+dependents_dummy_coded+race+core_city
+covs <- all.vars(covfmla)
+
+datw4[datw4$weight > 5, c(covs,'weight')]
+datw4[datw4$weight < .1, c(covs,'weight')]
+```
+
+We could check the approximate approach by using a two-step procedure for statistical
+inference: first, a weighted bootstrap sample (using `weight`) and then,
+second,  permuting treatment assignment within block, to create the
+distribution of the relevant test statistic. We do not do this here because the
+question about the effect of the messaging is not about the effects in the
+population from which we have sampled --- after all, this messaging strategy
+will be used in many different populations. Rather, it is to update our
+thinking about the theory behind the strategy --- and for that purpose, the
+sample-specific effect is good enough (and helps us avoid the hassle of coding
+up this two-step procedure.)
+
+
+# Analysis as a simple or completely randomized experiment
+
+If the treatment was assigned completely at random, i.e, not within block.
+
+```{r simple, echo=TRUE}
+## Fisher/Chisq tests
+res5 <- chisq_test(vaccine_timing_interestF~q115F,data=datw4,distribution=asymptotic())
+res5
+
+set.seed(12345)
+res6 <- chisq_test(vaccine_timing_interestF~q115F,data=datw4,distribution=approximate(nresample=10000))
+res6
+
+res7 <- xBalance(q115N~vaccine_timing_interestN,data=datw4,report="all")
+res7
+
+res8 <- difference_in_means(vaccine_timing_interestN~q115N,data=datw4)
+res8
+
+```
+
